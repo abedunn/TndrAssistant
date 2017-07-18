@@ -418,8 +418,10 @@ else:
 					liked = "NULL"
 					count = 0
 					last_update = ""
+					content_hash = ""
 				if last_update:
 					last_update = last_update.strftime("%Y-%m-%d %H:%M:%S")
+				console_logger.debug(user)
 				label = "<hr>" + user["name"] + ", " + str(age) + " - D: " + str(user["distance_mi"]*1.6) + ", L: " + str(liked) + ", C: " + str(count) + ", ID: " + user["_id"] + ", last update: " + last_update
 				if "instagram" in user:
 					if user["instagram"]:
@@ -436,6 +438,8 @@ else:
 					field_name = id + "_" + content_hash + "_" + str(s_number)
 				else:
 					field_name = id + "__"
+				if not "bio" in user:
+					user["bio"] = ""
 				label = label + "<br><input type=\"radio\" name=\"" + field_name + "\" value=\"PASS\">do nothing<input type=\"radio\" name=\"" + field_name + "\" value=\"DISLIKE\">dislike<input type=\"radio\" name=\"" + field_name + "\" value=\"LIKE\">LIKE<input type=\"radio\" name=\"" + field_name + "\" value=\"SUPERLIKE\">SUPERLIKE"
 				webpage.write((label+"<br>").encode("utf8"))
 				for photo in user["photos"]:
