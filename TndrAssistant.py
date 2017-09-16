@@ -16,6 +16,7 @@ parser.add_argument("--store", help="Store new users in database", action="store
 parser.add_argument("--dislike", help="Dislike users by IDs", nargs="+", metavar="ID")	
 parser.add_argument("--like", help="Like users by IDs", nargs="+", metavar="ID")
 parser.add_argument("--superlike", help="Superlike users by IDs", nargs="+", metavar="ID")
+parser.add_argument("--mark_superlike", help="Mark users by IDs for superlike", nargs="+", metavar="ID")
 parser.add_argument("--location", help="Change location", nargs=2, metavar=("LAT", "LON"))
 parser.add_argument("--details", help="Print user details", nargs="+", metavar="ID")
 parser.add_argument("--add", help="Add user to database by IDs", nargs="+", metavar="ID")
@@ -327,12 +328,20 @@ else:
 			file_logger.info(api_res)
 			if DB_NAME:
 				if api_res["match"]:
-					cur.execute("UPDATE TndrAssistant SET liked = 3 WHERE user_id = \"" + id + "\"")
+					cur.execute("UPDATE TndrAssistant SET liked = 3, mark_superlike = 0 WHERE user_id = \"" + id + "\"")
 					conn.commit()
 				else:
-					cur.execute("UPDATE TndrAssistant SET liked = 2 WHERE user_id = \"" + id + "\"")
+					cur.execute("UPDATE TndrAssistant SET liked = 2, mark_superlike = 0 WHERE user_id = \"" + id + "\"")
 					conn.commit()
 			time.sleep(random.uniform(1,2))
+	
+	if args.mark_superlike:
+		# MARK USER SUPERLIKE
+		for user_triplet in args.mark_superlike:
+			id, content_hash, s_number = user_triplet.split("_")
+			if DB_NAME:
+				cur.execute("UPDATE TndrAssistant SET mark_superlike = 1 WHERE user_id = \"" + id + "\"")
+				conn.commit()
 	
 	if args.location:
 		# UPDATE LOCATION
@@ -349,27 +358,31 @@ else:
 		# ADD USER
 		if DB_NAME:
 			for id in args.add:
-				user = requests.get("https://api.gotinder.com/user/"+id, headers=headers).json()["results"]
-				console_logger.debug(pprint.pformat(user))
-				age = current_timestamp.year - int(user["birth_date"][0:4])
-				ping_time = datetime.strptime(user["ping_time"][:-5],"%Y-%m-%dT%H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
-				if "instagram" in user:
-					instagram_username = user["instagram"]["username"] if "username" in user["instagram"] else None
-				else:
-					instagram_username = None
-				cur.execute("INSERT INTO TndrAssistant (user_id, name, age, ping_time_utc, distance, my_lat, my_lon, instagram, record_time) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-							(id, user["name"], age, ping_time, round(user["distance_mi"]*1.6,1), my_profile["pos"]["lat"], my_profile["pos"]["lon"], instagram_username, current_timestamp.strftime("%Y-%m-%d %H:%M"))
-						   )
-				conn.commit()
-				print("User %s (%s, %s) added to database." % (id, user["name"], age))
+				try:
+					user = requests.get("https://api.gotinder.com/user/"+id, headers=headers).json()["results"]
+					console_logger.debug(pprint.pformat(user))
+					age = current_timestamp.year - int(user["birth_date"][0:4])
+					ping_time = datetime.strptime(user["ping_time"][:-5],"%Y-%m-%dT%H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+					if "instagram" in user:
+						instagram_username = user["instagram"]["username"] if "username" in user["instagram"] else None
+					else:
+						instagram_username = None
+					cur.execute("INSERT INTO TndrAssistant (user_id, name, age, ping_time_utc, distance, my_lat, my_lon, instagram, record_time) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+								(id, user["name"], age, ping_time, round(user["distance_mi"]*1.6,1), my_profile["pos"]["lat"], my_profile["pos"]["lon"], instagram_username, current_timestamp.strftime("%Y-%m-%d %H:%M"))
+							   )
+					conn.commit()
+					print("User %s (%s, %s) added to database." % (id, user["name"], age))
+				except Exception as e:
+					file_logger.exception("%s (id: %s)", e, id)
+					console_logger.exception("%s (id: %s)", e, id)
 		else:
 			print("Database not set.")
 			exit()
 		
 	if args.pics:
 		# SHOW USER PICTURES
-		if args.pics[0]!="id" and args.pics[0]!="all" and args.pics[0]!="m" and args.pics[0]!="r":
-			print("Invalid OPTION value for --pics argument, choose from \"m\", \"r\", \"all\", \"id\"")
+		if args.pics[0]!="id" and args.pics[0]!="all" and args.pics[0]!="m" and args.pics[0]!="r" and args.pics[0]!="marked":
+			print("Invalid OPTION value for --pics argument, choose from \"m\", \"r\", \"marked\", \"all\", \"id\"")
 			exit()
 		if args.pics[0] == "id":
 			id_list = args.pics[1:]
@@ -383,6 +396,19 @@ else:
 						id_list.append(temp_list[i][0])
 				elif args.pics[0] == "m":
 					cur.execute("SELECT user_id, MAX(record_time) as rdate, MAX(liked) as liked FROM TndrAssistant WHERE liked = 3 OR (match_candidate = 1 AND (liked >= 1 OR liked IS NULL) AND record_time > \"" + (current_timestamp-timedelta(days=15)).strftime("%Y-%m-%d %H:%M") + "\") GROUP BY user_id ORDER BY rdate DESC")
+					temp_list = cur.fetchall()
+					id_list = []
+					for i in range(len(temp_list)):
+						id_list.append(temp_list[i][0])
+				elif args.pics[0] == "marked":
+					cur.execute("SELECT user_id, MAX(record_time) as rdate, MAX(liked) as liked FROM TndrAssistant WHERE mark_superlike = 1 GROUP BY user_id ORDER BY rdate DESC")
+					temp_list = cur.fetchall()
+					for i in range(len(temp_list)):
+						id = temp_list[i][0]
+						user = requests.get("https://api.gotinder.com/user/"+id, headers=headers).json()["results"]
+						cur.execute("UPDATE TndrAssistant SET distance = " + str(user["distance_mi"]*1.6) + " WHERE user_id = \"" + id + "\"")
+						conn.commit()
+					cur.execute("SELECT user_id, MAX(record_time) as rdate, MAX(liked) as liked FROM TndrAssistant WHERE mark_superlike = 1 GROUP BY user_id ORDER BY distance")
 					temp_list = cur.fetchall()
 					id_list = []
 					for i in range(len(temp_list)):
@@ -421,7 +447,6 @@ else:
 					content_hash = ""
 				if last_update:
 					last_update = last_update.strftime("%Y-%m-%d %H:%M:%S")
-				console_logger.debug(user)
 				label = "<hr>" + user["name"] + ", " + str(age) + " - D: " + str(user["distance_mi"]*1.6) + ", L: " + str(liked) + ", C: " + str(count) + ", ID: " + user["_id"] + ", last update: " + last_update
 				if "instagram" in user:
 					if user["instagram"]:
@@ -440,10 +465,20 @@ else:
 					field_name = id + "__"
 				if not "bio" in user:
 					user["bio"] = ""
-				label = label + "<br><input type=\"radio\" name=\"" + field_name + "\" value=\"PASS\">do nothing<input type=\"radio\" name=\"" + field_name + "\" value=\"DISLIKE\">dislike<input type=\"radio\" name=\"" + field_name + "\" value=\"LIKE\">LIKE<input type=\"radio\" name=\"" + field_name + "\" value=\"SUPERLIKE\">SUPERLIKE"
+				if user["jobs"] == []:
+					user["jobs"] = [{"title": {"name": ""}}]
+				elif not "title" in user["jobs"]:
+					user["jobs"] = [{"title": {"name": user["jobs"][0]["company"]["name"]}}]
+				if user["schools"] == []:
+					user["schools"] = [{"name": ""}]
+				label = label + "<br><input type=\"radio\" name=\"" + field_name + "\" value=\"PASS\">do nothing<input type=\"radio\" name=\"" + field_name + "\" value=\"DISLIKE\">dislike<input type=\"radio\" name=\"" + field_name + "\" value=\"LIKE\">LIKE<input type=\"radio\" name=\"" + field_name + "\" value=\"SUPERLIKE\">SUPERLIKE<input type=\"radio\" name=\"" + field_name + "\" value=\"MARK_SUPERLIKE\">Mark for Superlike"
 				webpage.write((label+"<br>").encode("utf8"))
 				for photo in user["photos"]:
 					webpage.write("<a href=\"" + photo["url"] + "\"><img width=\"200\" src=\"" + photo["url"] + "\"></a>")
+				console_logger.debug(user["jobs"])
+				console_logger.debug(user["schools"])
+				webpage.write("<br>"+(user["jobs"][0]["title"]["name"]+"<p>").encode("utf8"))
+				webpage.write("<br>"+(user["schools"][0]["name"]+"<p>").encode("utf8"))
 				webpage.write("<br>"+(user["bio"]+"<p>").encode("utf8"))
 				console_logger.debug("%s, %s, %s", user["name"], age, id)
 			except Exception as e:
